@@ -5,9 +5,15 @@ VoiceStudio Integrated Engine
 
 import asyncio
 import numpy as np
-from typing import Optional, Dict, Any
-from dataclasses import dataclass
+import librosa
+import json
+import uuid
+from typing import Optional, Dict, Any, List
+from dataclasses import dataclass, field, asdict
 from enum import Enum
+from datetime import datetime
+from pathlib import Path
+import pickle
 
 
 class Language(str, Enum):
@@ -34,6 +40,46 @@ class VoiceResponse:
     audio_output: Optional[np.ndarray] = None
     intent: Optional[str] = None
     emotion: Optional[str] = None
+
+
+@dataclass
+class VoiceFeatures:
+    """Voice model features extracted from audio"""
+    mfcc: np.ndarray
+    spectral_centroid: float
+    spectral_rolloff: float
+    zero_crossing_rate: float
+    pitch_mean: float
+    pitch_variance: float
+    energy: float
+
+
+@dataclass
+class VoiceModel:
+    """Voice model metadata and features"""
+    id: str = field(default_factory=lambda: str(uuid.uuid4()))
+    name: str = ""
+    description: str = ""
+    language: Language = Language.ARABIC
+    sample_rate: int = 16000
+    duration: float = 0.0
+    file_size: int = 0
+    features: Optional[VoiceFeatures] = None
+    created_at: str = field(default_factory=lambda: datetime.utcnow().isoformat())
+    updated_at: str = field(default_factory=lambda: datetime.utcnow().isoformat())
+    voice_type: str = "original"  # original/merged/cloned
+    quality_score: float = 0.0
+    tags: List[str] = field(default_factory=list)
+
+    def to_dict(self) -> Dict[str, Any]:
+        """Convert to dictionary, excluding numpy arrays"""
+        data = asdict(self)
+        data['features'] = None
+        return data
+
+    def to_json(self) -> str:
+        """Convert to JSON"""
+        return json.dumps(self.to_dict())
 
 
 class VoiceStudioEngine:
@@ -156,6 +202,93 @@ class VoiceStudioEngine:
             "audio": audio_response.audio_output,
             "duration": audio_response.duration
         }
+
+    async def create_voice_model(self, audio_data: np.ndarray, name: str,
+                                 description: str = "", language: Language = Language.ARABIC) -> VoiceModel:
+        """
+        Create a new voice model from audio recording
+        تحويل تسجيل صوتي إلى نموذج صوتي
+        """
+        try:
+            # Extract voice features
+            features = self._extract_voice_features(audio_data, language)
+
+            # Calculate quality score
+            quality_score = self._calculate_quality_score(audio_data, features)
+
+            # Create voice model
+            voice_model = VoiceModel(
+                name=name,
+                description=description,
+                language=language,
+                sample_rate=self.config.sample_rate,
+                duration=len(audio_data) / self.config.sample_rate,
+                file_size=len(audio_data) * 2,  # 16-bit audio
+                features=features,
+                quality_score=quality_score,
+                voice_type="original"
+            )
+
+            return voice_model
+        except Exception as e:
+            raise RuntimeError(f"Voice model creation error: {e}")
+
+    def _extract_voice_features(self, audio_data: np.ndarray, language: Language) -> VoiceFeatures:
+        """Extract acoustic features from audio"""
+        # Normalize audio
+        audio_normalized = audio_data / (np.max(np.abs(audio_data)) + 1e-9)
+
+        # MFCC - Mel-frequency cepstral coefficients
+        mfcc = librosa.feature.mfcc(y=audio_normalized, sr=self.config.sample_rate, n_mfcc=13)
+
+        # Spectral features
+        spectral_centroid = np.mean(librosa.feature.spectral_centroid(y=audio_normalized, sr=self.config.sample_rate))
+        spectral_rolloff = np.mean(librosa.feature.spectral_rolloff(y=audio_normalized, sr=self.config.sample_rate))
+
+        # Zero crossing rate
+        zero_crossing_rate = np.mean(librosa.feature.zero_crossing_rate(audio_normalized))
+
+        # Pitch estimation (simplified)
+        S = librosa.magphase(librosa.stft(audio_normalized))[0]
+        pitch_mean = np.mean(librosa.feature.spectral_centroid(S=S, sr=self.config.sample_rate))
+        pitch_variance = np.var(librosa.feature.spectral_centroid(S=S, sr=self.config.sample_rate))
+
+        # Energy
+        energy = np.mean(np.sqrt(np.sum(mfcc**2, axis=0)))
+
+        return VoiceFeatures(
+            mfcc=mfcc,
+            spectral_centroid=float(spectral_centroid),
+            spectral_rolloff=float(spectral_rolloff),
+            zero_crossing_rate=float(zero_crossing_rate),
+            pitch_mean=float(pitch_mean),
+            pitch_variance=float(pitch_variance),
+            energy=float(energy)
+        )
+
+    def _calculate_quality_score(self, audio_data: np.ndarray, features: VoiceFeatures) -> float:
+        """
+        Calculate voice quality score (0-100)
+        Based on clarity, energy, and spectral characteristics
+        """
+        # Normalize audio
+        audio_normalized = audio_data / (np.max(np.abs(audio_data)) + 1e-9)
+
+        # Signal-to-noise ratio estimate
+        noise_profile = np.std(audio_normalized[:self.config.sample_rate // 2])  # First 0.5s
+        snr = 20 * np.log10(np.mean(np.abs(audio_normalized)) / (noise_profile + 1e-9))
+        snr_score = min(100, max(0, snr * 5))
+
+        # Energy uniformity
+        energy_score = min(100, features.energy * 100)
+
+        # Spectral balance
+        spectral_balance = features.spectral_centroid / (features.spectral_rolloff + 1e-9)
+        spectral_score = min(100, spectral_balance * 50)
+
+        # Combined score
+        quality_score = (snr_score * 0.3 + energy_score * 0.3 + spectral_score * 0.4)
+        return float(min(100, max(0, quality_score)))
 
     def _extract_intent(self, text: str) -> str:
         """استخراج النية من النص - Extract intent"""
