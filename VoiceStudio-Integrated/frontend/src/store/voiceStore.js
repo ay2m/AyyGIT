@@ -13,6 +13,9 @@ export const useVoiceStore = create((set, get) => ({
   mergeHistory: null,
   synthesisHistory: [],
   databaseStats: null,
+  cloningResult: null,
+  cloningHistory: null,
+  clonedVoices: [],
 
   // Voice Operations
   fetchVoices: async (language = null, voiceType = null, skip = 0, limit = 10) => {
@@ -247,7 +250,91 @@ export const useVoiceStore = create((set, get) => ({
     }
   },
 
+  // Voice Cloning
+  cloneVoice: async (voiceId, text, cloneName, language = 'ar', cloningParams = {}) => {
+    set({ loading: true, error: null });
+    try {
+      const params = new URLSearchParams({
+        text,
+        clone_name: cloneName,
+        language,
+        cloning_method: cloningParams.method || 'basic',
+        intensity: cloningParams.intensity || 0.7,
+        pitch_shift: cloningParams.pitch_shift || 0,
+        tempo_factor: cloningParams.tempo_factor || 1.0,
+        formant_shift: cloningParams.formant_shift || 0,
+        breathiness: cloningParams.breathiness || 0.3,
+        robustness: cloningParams.robustness || 0.5
+      });
+
+      const response = await axios.post(
+        `${API_BASE_URL}/voices/${voiceId}/clone?${params}`
+      );
+
+      set((state) => ({
+        cloningResult: response.data,
+        voices: [response.data, ...state.voices],
+        loading: false
+      }));
+
+      return response.data;
+    } catch (error) {
+      set({ error: error.message, loading: false });
+      throw error;
+    }
+  },
+
+  getCloningHistory: async (voiceId) => {
+    set({ loading: true, error: null });
+    try {
+      const response = await axios.get(
+        `${API_BASE_URL}/voices/${voiceId}/clone-history`
+      );
+      set({ cloningHistory: response.data, loading: false });
+      return response.data;
+    } catch (error) {
+      set({ error: error.message, loading: false });
+    }
+  },
+
+  getClonedVoices: async (voiceId, limit = 10) => {
+    set({ loading: true, error: null });
+    try {
+      const params = new URLSearchParams({ limit });
+      const response = await axios.get(
+        `${API_BASE_URL}/voices/${voiceId}/cloned-from?${params}`
+      );
+      set({ clonedVoices: response.data.cloned_voices, loading: false });
+      return response.data;
+    } catch (error) {
+      set({ error: error.message, loading: false });
+    }
+  },
+
+  transferVoiceCharacteristics: async (sourceVoiceId, targetVoiceId, intensity = 0.7, preservePitch = false) => {
+    set({ loading: true, error: null });
+    try {
+      const params = new URLSearchParams({
+        source_voice_id: sourceVoiceId,
+        target_voice_id: targetVoiceId,
+        transfer_intensity: intensity,
+        preserve_target_pitch: preservePitch
+      });
+
+      const response = await axios.post(
+        `${API_BASE_URL}/voices/transfer?${params}`
+      );
+
+      set({ loading: false });
+      return response.data;
+    } catch (error) {
+      set({ error: error.message, loading: false });
+      throw error;
+    }
+  },
+
   // Utilities
   clearError: () => set({ error: null }),
-  clearSynthesisResult: () => set({ synthesisResult: null })
+  clearSynthesisResult: () => set({ synthesisResult: null }),
+  clearCloningResult: () => set({ cloningResult: null })
 }));

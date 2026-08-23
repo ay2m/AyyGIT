@@ -45,6 +45,12 @@ export default function Navbar() {
             🎤 Synthesize
           </button>
           <button
+            className={`nav-link ${isActive('/clone') ? 'active' : ''}`}
+            onClick={() => navigate('/clone')}
+          >
+            ✨ Clone
+          </button>
+          <button
             className={`nav-link ${isActive('/settings') ? 'active' : ''}`}
             onClick={() => navigate('/settings')}
           >
