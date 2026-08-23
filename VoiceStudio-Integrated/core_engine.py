@@ -178,6 +178,70 @@ class VoiceStudioEngine:
         except Exception as e:
             raise RuntimeError(f"Synthesis error: {e}")
 
+    async def synthesize_with_voice(self, text: str, voice_features: VoiceFeatures,
+                                   language: Language = Language.ARABIC) -> VoiceResponse:
+        """
+        تحويل النص إلى صوت باستخدام خصائص صوتية محددة
+        Convert text to speech using specific voice characteristics
+
+        Args:
+            text: Text to synthesize
+            voice_features: VoiceFeatures from a voice model
+            language: Language of the text
+
+        Returns:
+            VoiceResponse with synthesized audio
+        """
+        if not self.models_loaded:
+            raise RuntimeError("Models not loaded")
+
+        try:
+            # استخراج خصائص الصوت للتأثير على التخليق
+            # Extract voice characteristics for synthesis control
+            pitch_factor = voice_features.pitch_mean / 200.0  # Normalize pitch
+            energy_factor = voice_features.energy * 0.5  # Scale energy
+            spectral_brightness = voice_features.spectral_centroid / 4000.0  # 0-1 range
+
+            # ضبط معاملات Bark بناءً على خصائص الصوت
+            # Adjust Bark parameters based on voice features
+            text_temp = 0.6 + (spectral_brightness * 0.2)  # Range: 0.6-0.8
+            waveform_temp = 0.7 + (energy_factor * 0.2)  # Range: 0.7-0.9
+
+            # اختيار prompt اللغة
+            language_prompt = {
+                Language.ARABIC: "[SPEAKER] [LAUGH]",
+                Language.ENGLISH: "[SPEAKER] [CLEAR]",
+                Language.FRENCH: "[SPEAKER]",
+                Language.SPANISH: "[SPEAKER]",
+            }.get(language, "[SPEAKER]")
+
+            # توليد الصوت
+            audio_array = self.bark_generate(
+                text,
+                history_prompt=language_prompt,
+                text_temp=text_temp,
+                waveform_temp=waveform_temp
+            )
+
+            # تطبيق تأثيرات الصوت (اختياري - بسيط)
+            # Apply voice characteristics (optional)
+            audio_array = audio_array * (0.8 + energy_factor)
+
+            # منع القطع
+            max_val = np.max(np.abs(audio_array))
+            if max_val > 1.0:
+                audio_array = audio_array / max_val * 0.95
+
+            return VoiceResponse(
+                text=text,
+                confidence=0.95 + (voice_features.energy * 0.04),
+                language=language,
+                duration=len(audio_array) / self.bark_sr,
+                audio_output=audio_array
+            )
+        except Exception as e:
+            raise RuntimeError(f"Voice-based synthesis error: {e}")
+
     async def process_conversation(self, audio_input: np.ndarray) -> Dict[str, Any]:
         """
         معالجة محادثة كاملة: استماع → فهم → رد

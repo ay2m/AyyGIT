@@ -9,7 +9,7 @@ from fastapi.middleware.cors import CORSMiddleware
 import numpy as np
 import io
 import soundfile as sf
-from core_engine import VoiceStudioEngine, Language, AudioConfig, OptimizedVoiceStudio, VoiceModel
+from core_engine import VoiceStudioEngine, Language, AudioConfig, OptimizedVoiceStudio, VoiceModel, VoiceFeatures
 import asyncio
 import json
 import os
@@ -117,6 +117,126 @@ async def synthesize_speech(text: str, language: str = "ar"):
             media_type="audio/wav",
             filename="output.wav"
         )
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@app.post("/synthesis/voice")
+async def synthesize_with_voice(
+    text: str = Query(..., min_length=1, max_length=1000),
+    voice_id: str = Query(...),
+    language: str = Query("ar")
+):
+    """
+    تحويل النص إلى صوت باستخدام نموذج صوتي محدد
+    Convert text to speech using a specific voice model
+
+    - text: النص المراد تحويله (Text to synthesize)
+    - voice_id: معرف النموذج الصوتي (Voice model ID)
+    - language: اللغة (ar/en/fr/es)
+    """
+    try:
+        # البحث عن النموذج الصوتي
+        metadata_path = METADATA_DIR / f"{voice_id}.json"
+
+        if not metadata_path.exists():
+            raise HTTPException(status_code=404, detail=f"النموذج الصوتي {voice_id} غير موجود - Voice model not found")
+
+        # قراءة البيانات الوصفية
+        with open(metadata_path, "r", encoding="utf-8") as f:
+            model_data = json.load(f)
+
+        # اختيار اللغة
+        lang = Language[language.upper()] if language.upper() in Language.__members__ else Language.ARABIC
+
+        # التحقق من تطابق اللغة (اختياري)
+        if model_data.get("language") != lang.value:
+            print(f"⚠️ تحذير: لغة النموذج ({model_data.get('language')}) لا تطابق لغة المدخل ({lang.value})")
+
+        # إعادة بناء VoiceFeatures من البيانات المخزنة
+        # For Step 3, we use quality_score and language as proxies
+        # In a full implementation, we'd store the actual features
+        from dataclasses import dataclass as dc
+        dummy_features = VoiceFeatures(
+            mfcc=np.zeros((13, 1)),  # Placeholder
+            spectral_centroid=2000.0 + (model_data.get("quality_score", 75) * 10),
+            spectral_rolloff=4000.0 + (model_data.get("quality_score", 75) * 5),
+            zero_crossing_rate=0.1,
+            pitch_mean=100.0 + (model_data.get("quality_score", 75) * 2),
+            pitch_variance=50.0,
+            energy=model_data.get("quality_score", 75) / 100.0
+        )
+
+        # توليد الصوت باستخدام خصائص النموذج
+        result = await engine.synthesize_with_voice(text, dummy_features, lang)
+
+        # حفظ الصوت في ذاكرة
+        audio_bytes = io.BytesIO()
+        sf.write(audio_bytes, result.audio_output, engine.bark_sr, format='WAV')
+        audio_bytes.seek(0)
+
+        return FileResponse(
+            audio_bytes,
+            media_type="audio/wav",
+            filename=f"synthesis_{voice_id[:8]}.wav",
+            headers={
+                "X-Voice-ID": voice_id,
+                "X-Voice-Quality": str(model_data.get("quality_score", 0)),
+                "X-Voice-Type": model_data.get("voice_type", "unknown")
+            }
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"خطأ في التخليق الصوتي: {str(e)}")
+
+
+@app.get("/synthesis/preview")
+async def synthesis_preview(
+    text: str = Query(..., min_length=1, max_length=500),
+    voice_id: str = Query(...),
+    language: str = Query("ar")
+):
+    """
+    معاينة التخليق الصوتي بدون تنزيل الملف
+    Preview synthesis metadata without generating audio
+
+    Returns synthesis details:
+    - duration estimate
+    - quality metrics
+    - voice characteristics
+    - language compatibility
+    """
+    try:
+        metadata_path = METADATA_DIR / f"{voice_id}.json"
+
+        if not metadata_path.exists():
+            raise HTTPException(status_code=404, detail="النموذج الصوتي غير موجود - Voice model not found")
+
+        with open(metadata_path, "r", encoding="utf-8") as f:
+            model_data = json.load(f)
+
+        # تقدير المدة بناءً على طول النص
+        # Estimate duration: ~150 words per minute in speech
+        estimated_duration = (len(text.split()) / 150) * 60
+
+        lang = Language[language.upper()] if language.upper() in Language.__members__ else Language.ARABIC
+
+        return {
+            "voice_id": voice_id,
+            "voice_name": model_data.get("name", "Unknown"),
+            "voice_type": model_data.get("voice_type", "unknown"),
+            "voice_quality": model_data.get("quality_score", 0),
+            "text_length": len(text),
+            "word_count": len(text.split()),
+            "estimated_duration_seconds": round(estimated_duration, 2),
+            "language": lang.value,
+            "language_match": model_data.get("language") == lang.value,
+            "can_synthesize": True,
+            "message": "✅ جاهز للتخليق الصوتي - Ready for synthesis"
+        }
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
 
