@@ -411,6 +411,104 @@ async def delete_voice_model(voice_id: str):
         raise HTTPException(status_code=400, detail=str(e))
 
 
+@app.post("/voices/merge")
+async def merge_voice_models(
+    voice_ids: List[str] = Query(..., min_items=2, max_items=5),
+    weights: Optional[List[float]] = Query(None),
+    name: str = Query(..., min_length=1, max_length=100),
+    description: str = Query("", max_length=500),
+    language: str = Query("ar")
+):
+    """
+    دمج عدة نماذج صوتية في نموذج واحد
+    Merge multiple voice models into one
+
+    - voice_ids: قائمة معرفات الأصوات (List of voice IDs to merge, 2-5 voices)
+    - weights: أوزان اختيارية لكل صوت (Optional weights for each voice)
+    - name: اسم النموذج الجديد (Name for merged voice)
+    - description: وصف اختياري (Optional description)
+    - language: اللغة (ar/en/fr/es)
+    """
+    try:
+        # التحقق من وجود جميع الأصوات
+        audio_data_dict = {}
+        for voice_id in voice_ids:
+            audio_path = AUDIO_DIR / f"{voice_id}.wav"
+            metadata_path = METADATA_DIR / f"{voice_id}.json"
+
+            if not audio_path.exists() or not metadata_path.exists():
+                raise HTTPException(status_code=404, detail=f"النموذج الصوتي {voice_id} غير موجود - Voice model {voice_id} not found")
+
+            # قراءة الملف الصوتي
+            audio_data, sr = sf.read(str(audio_path))
+            if sr != 16000:
+                num_samples = int(len(audio_data) * 16000 / sr)
+                audio_data = np.interp(
+                    np.linspace(0, len(audio_data), num_samples),
+                    np.arange(len(audio_data)),
+                    audio_data
+                )
+            audio_data_dict[voice_id] = audio_data
+
+        # اختيار اللغة
+        lang = Language[language.upper()] if language.upper() in Language.__members__ else Language.ARABIC
+
+        # دمج الأصوات
+        merged_model = await engine.merge_voice_models(
+            voice_ids=voice_ids,
+            audio_data_dict=audio_data_dict,
+            weights=weights,
+            name=name,
+            description=description,
+            language=lang
+        )
+
+        # حفظ البيانات الوصفية
+        metadata_path = METADATA_DIR / f"{merged_model.id}.json"
+        with open(metadata_path, "w", encoding="utf-8") as f:
+            json.dump(merged_model.to_dict(), f, ensure_ascii=False, indent=2)
+
+        # حفظ الملف الصوتي
+        merged_audio = audio_data_dict[voice_ids[0]]  # Get one as reference
+        if weights:
+            # Blend audio manually here
+            blended = np.zeros(max(len(audio_data_dict[vid]) for vid in voice_ids))
+            for voice_id, weight in zip(voice_ids, (weights if weights else [1.0/len(voice_ids)]*len(voice_ids))):
+                audio = audio_data_dict[voice_id]
+                if len(audio) < len(blended):
+                    audio = np.pad(audio, (0, len(blended) - len(audio)), mode='constant')
+                blended += audio * weight
+            max_val = np.max(np.abs(blended))
+            if max_val > 0:
+                merged_audio = blended / max_val * 0.95
+            else:
+                merged_audio = blended
+        else:
+            merged_audio = np.mean([audio_data_dict[vid] for vid in voice_ids], axis=0)
+
+        audio_path = AUDIO_DIR / f"{merged_model.id}.wav"
+        sf.write(str(audio_path), merged_audio, 16000)
+
+        # تخزين في الذاكرة المؤقتة
+        voice_models_cache[merged_model.id] = merged_model
+
+        return {
+            "id": merged_model.id,
+            "name": merged_model.name,
+            "language": merged_model.language.value,
+            "voice_type": merged_model.voice_type,
+            "duration": merged_model.duration,
+            "quality_score": merged_model.quality_score,
+            "merged_from": voice_ids,
+            "created_at": merged_model.created_at,
+            "message": "✅ تم دمج الأصوات بنجاح - Voices merged successfully"
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"خطأ في دمج الأصوات: {str(e)}")
+
+
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(app, host="0.0.0.0", port=8000)

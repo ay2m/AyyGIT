@@ -320,6 +320,124 @@ class VoiceStudioEngine:
         }
         return responses.get(intent, responses["general"])
 
+    async def merge_voice_models(self, voice_ids: List[str], audio_data_dict: Dict[str, np.ndarray],
+                                weights: Optional[List[float]] = None, name: str = "",
+                                description: str = "", language: Language = Language.ARABIC) -> VoiceModel:
+        """
+        دمج عدة نماذج صوتية - Merge multiple voice models
+        Creates a new voice model by blending acoustic features and audio from multiple voices
+
+        Args:
+            voice_ids: List of voice model IDs to merge
+            audio_data_dict: Dictionary mapping voice_id to audio_data (numpy arrays)
+            weights: Optional list of weights for each voice (normalized to sum=1)
+            name: Name for the merged voice model
+            description: Description of the merged voice
+            language: Language of the merged voice
+
+        Returns:
+            VoiceModel: New merged voice model
+        """
+        try:
+            if not voice_ids or len(voice_ids) < 2:
+                raise ValueError("يجب توفير صوتين على الأقل للدمج - At least 2 voices required for merging")
+
+            if weights is None:
+                weights = [1.0 / len(voice_ids)] * len(voice_ids)
+            else:
+                weights = list(weights)
+                if len(weights) != len(voice_ids):
+                    raise ValueError("عدد الأوزان يجب أن يطابق عدد الأصوات - Number of weights must match number of voices")
+                # Normalize weights
+                total = sum(weights)
+                weights = [w / total for w in weights]
+
+            # Blend audio data
+            merged_audio = self._blend_audio_arrays(audio_data_dict, voice_ids, weights)
+
+            # Extract features from merged audio
+            merged_features = self._extract_voice_features(merged_audio, language)
+
+            # Calculate quality score
+            quality_score = self._calculate_quality_score(merged_audio, merged_features)
+
+            # Create merged voice model
+            voice_model = VoiceModel(
+                name=name,
+                description=description,
+                language=language,
+                sample_rate=self.config.sample_rate,
+                duration=len(merged_audio) / self.config.sample_rate,
+                file_size=len(merged_audio) * 2,
+                features=merged_features,
+                quality_score=quality_score,
+                voice_type="merged",
+                tags=[f"merged_from_{vid[:8]}" for vid in voice_ids]
+            )
+
+            return voice_model
+        except Exception as e:
+            raise RuntimeError(f"Voice merging error: {e}")
+
+    def _blend_audio_arrays(self, audio_data_dict: Dict[str, np.ndarray],
+                           voice_ids: List[str], weights: List[float]) -> np.ndarray:
+        """
+        Blend multiple audio arrays using weighted averaging
+        Handles different audio lengths by padding shorter ones
+        """
+        # Find max length
+        max_length = max(len(audio_data_dict[vid]) for vid in voice_ids)
+
+        # Pad and blend
+        blended = np.zeros(max_length)
+        for voice_id, weight in zip(voice_ids, weights):
+            audio = audio_data_dict[voice_id]
+            # Pad if necessary
+            if len(audio) < max_length:
+                audio = np.pad(audio, (0, max_length - len(audio)), mode='constant')
+            blended += audio * weight
+
+        # Normalize to prevent clipping
+        max_val = np.max(np.abs(blended))
+        if max_val > 0:
+            blended = blended / max_val * 0.95
+
+        return blended
+
+    def _blend_voice_features(self, features_dict: Dict[str, VoiceFeatures],
+                             voice_ids: List[str], weights: List[float]) -> VoiceFeatures:
+        """
+        Blend acoustic features from multiple voice models
+        Creates interpolated features that represent the merged voice
+        """
+        blended_mfcc = np.zeros_like(list(features_dict.values())[0].mfcc)
+        blended_spectral_centroid = 0.0
+        blended_spectral_rolloff = 0.0
+        blended_zero_crossing = 0.0
+        blended_pitch_mean = 0.0
+        blended_pitch_variance = 0.0
+        blended_energy = 0.0
+
+        for voice_id, weight in zip(voice_ids, weights):
+            features = features_dict[voice_id]
+            blended_mfcc += features.mfcc * weight
+            blended_spectral_centroid += features.spectral_centroid * weight
+            blended_spectral_rolloff += features.spectral_rolloff * weight
+            blended_zero_crossing += features.zero_crossing_rate * weight
+            blended_pitch_mean += features.pitch_mean * weight
+            blended_pitch_variance += features.pitch_variance * weight
+            blended_energy += features.energy * weight
+
+        return VoiceFeatures(
+            mfcc=blended_mfcc,
+            spectral_centroid=float(blended_spectral_centroid),
+            spectral_rolloff=float(blended_spectral_rolloff),
+            zero_crossing_rate=float(blended_zero_crossing),
+            pitch_mean=float(blended_pitch_mean),
+            pitch_variance=float(blended_pitch_variance),
+            energy=float(blended_energy)
+        )
+
 
 class OptimizedVoiceStudio(VoiceStudioEngine):
     """
