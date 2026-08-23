@@ -1,0 +1,34 @@
+<?php
+
+namespace Hashtopolis\inc\utils;
+
+use Exception;
+use Hashtopolis\dba\models\CrackerBinary;
+use Hashtopolis\dba\QueryFilter;
+use Hashtopolis\dba\Factory;
+use Composer\Semver\Comparator;
+use Hashtopolis\inc\HTException;
+
+class CrackerBinaryUtils {
+  /**
+   * @param int $crackerBinaryTypeId
+   * @return CrackerBinary|null
+   * @throws HTException
+   * @throws Exception
+   */
+  public static function getNewestVersion(int $crackerBinaryTypeId): ?CrackerBinary {
+    $qF = new QueryFilter(CrackerBinary::CRACKER_BINARY_TYPE_ID, $crackerBinaryTypeId, "=");
+    $binaries = Factory::getCrackerBinaryFactory()->filter([Factory::FILTER => $qF]);
+    /** @var ?CrackerBinary $newest */
+    $newest = null;
+    foreach ($binaries as $binary) {
+      if ($newest == null || Comparator::greaterThan($binary->getVersion(), $newest->getVersion())) {
+        $newest = $binary;
+      }
+    }
+    if ($newest == null) {
+      throw new HTException("No binary versions available, cannot create tasks!");
+    }
+    return $newest;
+  }
+}
