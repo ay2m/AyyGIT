@@ -755,6 +755,255 @@ async def get_database_stats():
         raise HTTPException(status_code=400, detail=str(e))
 
 
+# ===== صوت الاستنساخ - Voice Cloning Endpoints =====
+
+@app.post("/voices/{voice_id}/clone")
+async def clone_voice_model(
+    voice_id: str,
+    text: str = Query(..., min_length=1, max_length=1000),
+    clone_name: str = Query(..., min_length=1, max_length=100),
+    language: str = Query("ar"),
+    cloning_method: str = Query("basic"),
+    intensity: float = Query(0.8, ge=0.0, le=1.0),
+    pitch_shift: float = Query(0.0, ge=-12.0, le=12.0),
+    tempo_factor: float = Query(1.0, ge=0.5, le=2.0),
+    formant_shift: float = Query(0.0, ge=-1.0, le=1.0),
+    breathiness: float = Query(0.5, ge=0.0, le=1.0),
+    robustness: float = Query(0.8, ge=0.0, le=1.0)
+):
+    """
+    استنساخ نموذج صوتي باستخدام تقنيات متقدمة
+    Clone a voice model with advanced parameters
+
+    - voice_id: معرف الصوت المراد استنساخه (Source voice ID)
+    - text: النص المراد تخليقه بالصوت المستنسخ (Text to synthesize)
+    - clone_name: اسم الصوت المستنسخ (Cloned voice name)
+    - language: اللغة (ar/en/fr/es)
+    - cloning_method: 'basic' أو 'advanced'
+    - intensity: شدة الاستنساخ (0.0-1.0)
+    - pitch_shift: تحويل الطبقة الصوتية بالنصف نبرة (-12 إلى +12)
+    - tempo_factor: عامل السرعة (0.5 إلى 2.0)
+    - formant_shift: تحويل الرنين (-1.0 إلى 1.0)
+    - breathiness: مستوى التنفس (0.0-1.0)
+    - robustness: المتانة (0.0-1.0)
+    """
+    try:
+        # الحصول على النموذج الأصلي
+        source_voice = db.get_voice_model(voice_id)
+        if not source_voice:
+            raise HTTPException(status_code=404, detail=f"النموذج الصوتي {voice_id} غير موجود - Voice model not found")
+
+        # الحصول على خصائص الصوت المصدر
+        source_features = db.get_voice_features(voice_id)
+        if not source_features:
+            source_features = VoiceFeatures(
+                mfcc=np.zeros((13, 1)),
+                spectral_centroid=2000.0 + (source_voice.quality_score * 10),
+                spectral_rolloff=4000.0 + (source_voice.quality_score * 5),
+                zero_crossing_rate=0.1,
+                pitch_mean=100.0 + (source_voice.quality_score * 2),
+                pitch_variance=50.0,
+                energy=source_voice.quality_score / 100.0
+            )
+
+        # اختيار اللغة
+        lang = Language[language.upper()] if language.upper() in Language.__members__ else Language.ARABIC
+
+        # استنساخ الصوت
+        result = await engine.clone_voice(
+            source_voice_features=source_features,
+            target_text=text,
+            language=lang,
+            cloning_method=cloning_method,
+            intensity=intensity,
+            pitch_shift=pitch_shift,
+            tempo_factor=tempo_factor,
+            formant_shift=formant_shift,
+            breathiness=breathiness,
+            robustness=robustness
+        )
+
+        # إنشاء نموذج صوتي جديد للصوت المستنسخ
+        cloned_voice_model = VoiceModel(
+            name=clone_name,
+            description=f"Cloned from {source_voice.name}",
+            language=lang,
+            sample_rate=engine.config.sample_rate,
+            duration=result.duration,
+            file_size=len(result.audio_output) * 2,
+            quality_score=source_voice.quality_score * (intensity * 0.8 + 0.2),
+            voice_type="cloned",
+            tags=[f"cloned_from_{voice_id[:8]}", cloning_method]
+        )
+
+        # حفظ الملف الصوتي
+        audio_path = AUDIO_DIR / f"{cloned_voice_model.id}.wav"
+        sf.write(str(audio_path), result.audio_output, engine.bark_sr)
+
+        # حفظ في قاعدة البيانات
+        cloned_features = engine._extract_voice_features(result.audio_output, lang)
+        db.save_voice_model(cloned_voice_model, str(audio_path), cloned_features)
+
+        # حفظ سجل الاستنساخ
+        db.save_cloning_history(cloned_voice_model.id, voice_id, cloning_method, intensity)
+
+        # حفظ معاملات الاستنساخ
+        db.save_cloning_parameters(
+            cloned_voice_model.id,
+            pitch_shift=pitch_shift,
+            tempo_factor=tempo_factor,
+            formant_shift=formant_shift,
+            breathiness=breathiness,
+            robustness=robustness
+        )
+
+        return {
+            "cloned_voice_id": cloned_voice_model.id,
+            "cloned_voice_name": cloned_voice_model.name,
+            "source_voice_id": voice_id,
+            "source_voice_name": source_voice.name,
+            "cloning_method": cloning_method,
+            "intensity": intensity,
+            "duration": cloned_voice_model.duration,
+            "quality_score": cloned_voice_model.quality_score,
+            "message": "✅ تم استنساخ الصوت بنجاح - Voice cloned successfully"
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"خطأ في استنساخ الصوت: {str(e)}")
+
+
+@app.get("/voices/{voice_id}/clone-history")
+async def get_clone_history(voice_id: str):
+    """
+    الحصول على سجل استنساخ النموذج الصوتي
+    Get cloning history for a voice model
+    """
+    try:
+        voice = db.get_voice_model(voice_id)
+        if not voice:
+            raise HTTPException(status_code=404, detail="النموذج الصوتي غير موجود - Voice model not found")
+
+        history = db.get_cloning_history(voice_id)
+        if not history:
+            return {
+                "voice_id": voice_id,
+                "is_cloned": False,
+                "message": "هذا النموذج ليس مستنسخاً - This voice is not a cloned model"
+            }
+
+        # الحصول على معاملات الاستنساخ
+        params = db.get_cloning_parameters(voice_id)
+
+        return {
+            "voice_id": voice_id,
+            "voice_name": voice.name,
+            "is_cloned": True,
+            "source_voice_id": history['source_voice_id'],
+            "cloning_method": history['cloning_method'],
+            "intensity": history['intensity'],
+            "cloning_parameters": params or {},
+            "cloned_at": history['created_at']
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@app.get("/voices/{voice_id}/cloned-from")
+async def get_cloned_voices(voice_id: str, limit: int = Query(10, ge=1, le=100)):
+    """
+    الحصول على جميع الأصوات المستنسخة من صوت مصدر
+    Get all cloned voices created from a source voice
+
+    - voice_id: معرف الصوت المصدر (Source voice ID)
+    """
+    try:
+        voice = db.get_voice_model(voice_id)
+        if not voice:
+            raise HTTPException(status_code=404, detail="النموذج الصوتي غير موجود - Voice model not found")
+
+        cloned_list = db.get_cloned_voices_from_source(voice_id, limit=limit)
+
+        return {
+            "source_voice_id": voice_id,
+            "source_voice_name": voice.name,
+            "total_cloned": len(cloned_list),
+            "cloned_voices": cloned_list
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@app.post("/voices/transfer")
+async def transfer_voice_characteristics(
+    source_voice_id: str = Query(...),
+    target_voice_id: str = Query(...),
+    transfer_intensity: float = Query(0.7, ge=0.0, le=1.0),
+    preserve_target_pitch: bool = Query(True)
+):
+    """
+    نقل خصائص الصوت من صوت إلى آخر
+    Transfer voice characteristics from one voice to another
+
+    - source_voice_id: معرف الصوت المصدر (Source voice ID)
+    - target_voice_id: معرف الصوت الهدف (Target voice ID)
+    - transfer_intensity: شدة النقل (0.0-1.0)
+    - preserve_target_pitch: الحفاظ على نبرة الصوت الهدف
+    """
+    try:
+        # الحصول على الأصوات
+        source_voice = db.get_voice_model(source_voice_id)
+        if not source_voice:
+            raise HTTPException(status_code=404, detail="الصوت المصدر غير موجود - Source voice not found")
+
+        target_voice = db.get_voice_model(target_voice_id)
+        if not target_voice:
+            raise HTTPException(status_code=404, detail="الصوت الهدف غير موجود - Target voice not found")
+
+        # الحصول على خصائص الأصوات
+        source_features = db.get_voice_features(source_voice_id)
+        target_features = db.get_voice_features(target_voice_id)
+
+        if not source_features or not target_features:
+            raise HTTPException(status_code=400, detail="غير قادر على الحصول على خصائص الصوت - Cannot extract voice features")
+
+        # نقل الخصائص
+        transferred_features = VoiceFeatures(
+            mfcc=source_features.mfcc * transfer_intensity + target_features.mfcc * (1.0 - transfer_intensity),
+            spectral_centroid=source_features.spectral_centroid * transfer_intensity + target_features.spectral_centroid * (1.0 - transfer_intensity),
+            spectral_rolloff=source_features.spectral_rolloff * transfer_intensity + target_features.spectral_rolloff * (1.0 - transfer_intensity),
+            zero_crossing_rate=source_features.zero_crossing_rate * transfer_intensity + target_features.zero_crossing_rate * (1.0 - transfer_intensity),
+            pitch_mean=target_features.pitch_mean if preserve_target_pitch else (source_features.pitch_mean * transfer_intensity + target_features.pitch_mean * (1.0 - transfer_intensity)),
+            pitch_variance=source_features.pitch_variance * transfer_intensity + target_features.pitch_variance * (1.0 - transfer_intensity),
+            energy=source_features.energy * transfer_intensity + target_features.energy * (1.0 - transfer_intensity)
+        )
+
+        return {
+            "source_voice_id": source_voice_id,
+            "source_voice_name": source_voice.name,
+            "target_voice_id": target_voice_id,
+            "target_voice_name": target_voice.name,
+            "transfer_intensity": transfer_intensity,
+            "preserve_target_pitch": preserve_target_pitch,
+            "transferred_features": {
+                "spectral_centroid": float(transferred_features.spectral_centroid),
+                "spectral_rolloff": float(transferred_features.spectral_rolloff),
+                "pitch_mean": float(transferred_features.pitch_mean),
+                "energy": float(transferred_features.energy)
+            },
+            "message": "✅ تم نقل الخصائص الصوتية بنجاح - Voice characteristics transferred successfully"
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(app, host="0.0.0.0", port=8000)

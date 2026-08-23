@@ -86,11 +86,43 @@ class VoiceStudioDB:
             )
         """)
 
+        # Voice cloning history table
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS cloning_history (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                cloned_voice_id TEXT NOT NULL,
+                source_voice_id TEXT NOT NULL,
+                cloning_method TEXT DEFAULT 'basic',
+                intensity REAL DEFAULT 0.8,
+                created_at TEXT NOT NULL,
+                FOREIGN KEY (cloned_voice_id) REFERENCES voice_models(id),
+                FOREIGN KEY (source_voice_id) REFERENCES voice_models(id)
+            )
+        """)
+
+        # Voice cloning parameters table
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS cloning_parameters (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                cloned_voice_id TEXT NOT NULL,
+                pitch_shift REAL DEFAULT 0.0,
+                tempo_factor REAL DEFAULT 1.0,
+                formant_shift REAL DEFAULT 0.0,
+                breathiness REAL DEFAULT 0.5,
+                robustness REAL DEFAULT 0.8,
+                advanced_settings TEXT,
+                created_at TEXT NOT NULL,
+                FOREIGN KEY (cloned_voice_id) REFERENCES voice_models(id)
+            )
+        """)
+
         # Create indexes for common queries
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_voice_language ON voice_models(language)")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_voice_type ON voice_models(voice_type)")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_voice_created ON voice_models(created_at)")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_synthesis_voice ON synthesis_history(voice_id)")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_cloning_source ON cloning_history(source_voice_id)")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_cloning_cloned ON cloning_history(cloned_voice_id)")
 
         conn.commit()
 
@@ -393,3 +425,112 @@ class VoiceStudioDB:
         except Exception as e:
             print(f"Database integrity check failed: {e}")
             return False
+
+    def save_cloning_history(self, cloned_voice_id: str, source_voice_id: str,
+                            cloning_method: str = "basic", intensity: float = 0.8) -> bool:
+        """Save voice cloning history"""
+        conn = self.get_connection()
+        cursor = conn.cursor()
+
+        try:
+            cursor.execute("""
+                INSERT INTO cloning_history (cloned_voice_id, source_voice_id, cloning_method, intensity, created_at)
+                VALUES (?, ?, ?, ?, ?)
+            """, (
+                cloned_voice_id,
+                source_voice_id,
+                cloning_method,
+                intensity,
+                datetime.utcnow().isoformat()
+            ))
+            conn.commit()
+            return True
+        except Exception as e:
+            print(f"Error saving cloning history: {e}")
+            return False
+
+    def get_cloning_history(self, cloned_voice_id: str) -> Optional[Dict[str, Any]]:
+        """Get cloning history for a voice"""
+        conn = self.get_connection()
+        cursor = conn.cursor()
+
+        cursor.execute("""
+            SELECT source_voice_id, cloning_method, intensity, created_at FROM cloning_history
+            WHERE cloned_voice_id = ? ORDER BY created_at DESC LIMIT 1
+        """, (cloned_voice_id,))
+
+        row = cursor.fetchone()
+        if not row:
+            return None
+
+        return {
+            'source_voice_id': row['source_voice_id'],
+            'cloning_method': row['cloning_method'],
+            'intensity': row['intensity'],
+            'created_at': row['created_at']
+        }
+
+    def save_cloning_parameters(self, cloned_voice_id: str, pitch_shift: float = 0.0,
+                               tempo_factor: float = 1.0, formant_shift: float = 0.0,
+                               breathiness: float = 0.5, robustness: float = 0.8,
+                               advanced_settings: Optional[Dict[str, Any]] = None) -> bool:
+        """Save advanced cloning parameters for a voice"""
+        conn = self.get_connection()
+        cursor = conn.cursor()
+
+        try:
+            cursor.execute("""
+                INSERT OR REPLACE INTO cloning_parameters
+                (cloned_voice_id, pitch_shift, tempo_factor, formant_shift, breathiness, robustness, advanced_settings, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """, (
+                cloned_voice_id,
+                pitch_shift,
+                tempo_factor,
+                formant_shift,
+                breathiness,
+                robustness,
+                json.dumps(advanced_settings) if advanced_settings else None,
+                datetime.utcnow().isoformat()
+            ))
+            conn.commit()
+            return True
+        except Exception as e:
+            print(f"Error saving cloning parameters: {e}")
+            return False
+
+    def get_cloning_parameters(self, cloned_voice_id: str) -> Optional[Dict[str, Any]]:
+        """Get cloning parameters for a voice"""
+        conn = self.get_connection()
+        cursor = conn.cursor()
+
+        cursor.execute("""
+            SELECT pitch_shift, tempo_factor, formant_shift, breathiness, robustness, advanced_settings
+            FROM cloning_parameters WHERE cloned_voice_id = ?
+        """, (cloned_voice_id,))
+
+        row = cursor.fetchone()
+        if not row:
+            return None
+
+        return {
+            'pitch_shift': row['pitch_shift'],
+            'tempo_factor': row['tempo_factor'],
+            'formant_shift': row['formant_shift'],
+            'breathiness': row['breathiness'],
+            'robustness': row['robustness'],
+            'advanced_settings': json.loads(row['advanced_settings']) if row['advanced_settings'] else {}
+        }
+
+    def get_cloned_voices_from_source(self, source_voice_id: str, limit: int = 10) -> List[Dict[str, Any]]:
+        """Get all cloned voices created from a source voice"""
+        conn = self.get_connection()
+        cursor = conn.cursor()
+
+        cursor.execute("""
+            SELECT cloned_voice_id, cloning_method, intensity, created_at FROM cloning_history
+            WHERE source_voice_id = ? ORDER BY created_at DESC LIMIT ?
+        """, (source_voice_id, limit))
+
+        rows = cursor.fetchall()
+        return [dict(row) for row in rows]
