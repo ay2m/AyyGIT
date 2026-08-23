@@ -10,11 +10,14 @@ import numpy as np
 import io
 import soundfile as sf
 from core_engine import VoiceStudioEngine, Language, AudioConfig, OptimizedVoiceStudio, VoiceModel, VoiceFeatures
+from database import VoiceStudioDB
 import asyncio
 import json
 import os
 from pathlib import Path
 import shutil
+from datetime import datetime
+from typing import List, Optional
 
 app = FastAPI(
     title="VoiceStudio API",
@@ -34,17 +37,16 @@ app.add_middleware(
 # تهيئة المحرك
 engine = OptimizedVoiceStudio()
 
-# تهيئة مجلدات التخزين
+# تهيئة قاعدة البيانات
+db = VoiceStudioDB("./voices/voicestudio.db")
+
+# تهيئة مجلدات التخزين للملفات الصوتية
 VOICES_DIR = Path("./voices")
-MODELS_DIR = VOICES_DIR / "models"
-METADATA_DIR = VOICES_DIR / "metadata"
 AUDIO_DIR = VOICES_DIR / "audio"
+BACKUP_DIR = VOICES_DIR / "backups"
 
-for directory in [MODELS_DIR, METADATA_DIR, AUDIO_DIR]:
+for directory in [AUDIO_DIR, BACKUP_DIR]:
     directory.mkdir(parents=True, exist_ok=True)
-
-# قاموس لتخزين النماذج في الذاكرة (للتطوير - استخدم قاعدة بيانات في الإنتاج)
-voice_models_cache = {}
 
 
 @app.get("/health")
@@ -136,39 +138,37 @@ async def synthesize_with_voice(
     - language: اللغة (ar/en/fr/es)
     """
     try:
-        # البحث عن النموذج الصوتي
-        metadata_path = METADATA_DIR / f"{voice_id}.json"
-
-        if not metadata_path.exists():
+        # البحث عن النموذج الصوتي من قاعدة البيانات
+        voice = db.get_voice_model(voice_id)
+        if not voice:
             raise HTTPException(status_code=404, detail=f"النموذج الصوتي {voice_id} غير موجود - Voice model not found")
-
-        # قراءة البيانات الوصفية
-        with open(metadata_path, "r", encoding="utf-8") as f:
-            model_data = json.load(f)
 
         # اختيار اللغة
         lang = Language[language.upper()] if language.upper() in Language.__members__ else Language.ARABIC
 
         # التحقق من تطابق اللغة (اختياري)
-        if model_data.get("language") != lang.value:
-            print(f"⚠️ تحذير: لغة النموذج ({model_data.get('language')}) لا تطابق لغة المدخل ({lang.value})")
+        if voice.language != lang:
+            print(f"⚠️ تحذير: لغة النموذج ({voice.language.value}) لا تطابق لغة المدخل ({lang.value})")
 
-        # إعادة بناء VoiceFeatures من البيانات المخزنة
-        # For Step 3, we use quality_score and language as proxies
-        # In a full implementation, we'd store the actual features
-        from dataclasses import dataclass as dc
-        dummy_features = VoiceFeatures(
-            mfcc=np.zeros((13, 1)),  # Placeholder
-            spectral_centroid=2000.0 + (model_data.get("quality_score", 75) * 10),
-            spectral_rolloff=4000.0 + (model_data.get("quality_score", 75) * 5),
-            zero_crossing_rate=0.1,
-            pitch_mean=100.0 + (model_data.get("quality_score", 75) * 2),
-            pitch_variance=50.0,
-            energy=model_data.get("quality_score", 75) / 100.0
-        )
+        # الحصول على خصائص الصوت من قاعدة البيانات
+        features = db.get_voice_features(voice_id)
+        if not features:
+            # إعادة بناء VoiceFeatures من الجودة كبديل
+            features = VoiceFeatures(
+                mfcc=np.zeros((13, 1)),
+                spectral_centroid=2000.0 + (voice.quality_score * 10),
+                spectral_rolloff=4000.0 + (voice.quality_score * 5),
+                zero_crossing_rate=0.1,
+                pitch_mean=100.0 + (voice.quality_score * 2),
+                pitch_variance=50.0,
+                energy=voice.quality_score / 100.0
+            )
 
         # توليد الصوت باستخدام خصائص النموذج
-        result = await engine.synthesize_with_voice(text, dummy_features, lang)
+        result = await engine.synthesize_with_voice(text, features, lang)
+
+        # حفظ سجل التخليق
+        db.save_synthesis_history(voice_id, text, lang.value, result.duration)
 
         # حفظ الصوت في ذاكرة
         audio_bytes = io.BytesIO()
@@ -181,8 +181,8 @@ async def synthesize_with_voice(
             filename=f"synthesis_{voice_id[:8]}.wav",
             headers={
                 "X-Voice-ID": voice_id,
-                "X-Voice-Quality": str(model_data.get("quality_score", 0)),
-                "X-Voice-Type": model_data.get("voice_type", "unknown")
+                "X-Voice-Quality": str(voice.quality_score),
+                "X-Voice-Type": voice.voice_type
             }
         )
     except HTTPException:
@@ -208,13 +208,10 @@ async def synthesis_preview(
     - language compatibility
     """
     try:
-        metadata_path = METADATA_DIR / f"{voice_id}.json"
-
-        if not metadata_path.exists():
+        # الحصول على البيانات من قاعدة البيانات
+        voice = db.get_voice_model(voice_id)
+        if not voice:
             raise HTTPException(status_code=404, detail="النموذج الصوتي غير موجود - Voice model not found")
-
-        with open(metadata_path, "r", encoding="utf-8") as f:
-            model_data = json.load(f)
 
         # تقدير المدة بناءً على طول النص
         # Estimate duration: ~150 words per minute in speech
@@ -224,14 +221,14 @@ async def synthesis_preview(
 
         return {
             "voice_id": voice_id,
-            "voice_name": model_data.get("name", "Unknown"),
-            "voice_type": model_data.get("voice_type", "unknown"),
-            "voice_quality": model_data.get("quality_score", 0),
+            "voice_name": voice.name,
+            "voice_type": voice.voice_type,
+            "voice_quality": voice.quality_score,
             "text_length": len(text),
             "word_count": len(text.split()),
             "estimated_duration_seconds": round(estimated_duration, 2),
             "language": lang.value,
-            "language_match": model_data.get("language") == lang.value,
+            "language_match": voice.language == lang,
             "can_synthesize": True,
             "message": "✅ جاهز للتخليق الصوتي - Ready for synthesis"
         }
@@ -379,17 +376,12 @@ async def create_voice_model(
             language=lang
         )
 
-        # حفظ البيانات الوصفية
-        metadata_path = METADATA_DIR / f"{voice_model.id}.json"
-        with open(metadata_path, "w", encoding="utf-8") as f:
-            json.dump(voice_model.to_dict(), f, ensure_ascii=False, indent=2)
-
         # حفظ الملف الصوتي
         audio_path = AUDIO_DIR / f"{voice_model.id}.wav"
         sf.write(str(audio_path), audio_data, 16000)
 
-        # تخزين في الذاكرة المؤقتة
-        voice_models_cache[voice_model.id] = voice_model
+        # حفظ في قاعدة البيانات
+        db.save_voice_model(voice_model, str(audio_path), voice_model.features)
 
         return {
             "id": voice_model.id,
@@ -417,31 +409,32 @@ async def list_voice_models(
     List all voice models with optional filters
     """
     try:
-        # جمع جميع نماذج الصوت من المجلد
-        all_models = []
-        for metadata_file in METADATA_DIR.glob("*.json"):
-            with open(metadata_file, "r", encoding="utf-8") as f:
-                model_data = json.load(f)
-                all_models.append(model_data)
+        # استعلام قاعدة البيانات
+        voices = db.list_voice_models(language=language, voice_type=voice_type, skip=skip, limit=limit)
+        total = db.count_voice_models(language=language, voice_type=voice_type)
 
-        # تطبيق المرشحات
-        filtered_models = all_models
-        if language:
-            filtered_models = [m for m in filtered_models if m["language"] == language]
-        if voice_type:
-            filtered_models = [m for m in filtered_models if m["voice_type"] == voice_type]
-
-        # ترتيب حسب تاريخ الإنشاء (الأحدث أولاً)
-        filtered_models.sort(key=lambda x: x["created_at"], reverse=True)
-
-        # تطبيق التصفح
-        paginated = filtered_models[skip : skip + limit]
+        # تحويل إلى قاموس للإرجاع
+        voices_data = [
+            {
+                "id": v.id,
+                "name": v.name,
+                "description": v.description,
+                "language": v.language.value,
+                "duration": v.duration,
+                "quality_score": v.quality_score,
+                "voice_type": v.voice_type,
+                "tags": v.tags,
+                "created_at": v.created_at,
+                "updated_at": v.updated_at
+            }
+            for v in voices
+        ]
 
         return {
-            "total": len(filtered_models),
+            "total": total,
             "skip": skip,
             "limit": limit,
-            "voices": paginated
+            "voices": voices_data
         }
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
@@ -454,20 +447,29 @@ async def get_voice_model(voice_id: str):
     Get details of a specific voice model
     """
     try:
-        metadata_path = METADATA_DIR / f"{voice_id}.json"
+        # استعلام قاعدة البيانات
+        voice = db.get_voice_model(voice_id)
 
-        if not metadata_path.exists():
+        if not voice:
             raise HTTPException(status_code=404, detail="النموذج الصوتي غير موجود - Voice model not found")
 
-        with open(metadata_path, "r", encoding="utf-8") as f:
-            model_data = json.load(f)
-
         # التحقق من وجود الملف الصوتي
-        audio_path = AUDIO_DIR / f"{voice_id}.wav"
-        audio_exists = audio_path.exists()
+        audio_path = db.get_voice_audio_path(voice_id)
+        audio_exists = Path(audio_path).exists() if audio_path else False
 
         return {
-            **model_data,
+            "id": voice.id,
+            "name": voice.name,
+            "description": voice.description,
+            "language": voice.language.value,
+            "sample_rate": voice.sample_rate,
+            "duration": voice.duration,
+            "file_size": voice.file_size,
+            "quality_score": voice.quality_score,
+            "voice_type": voice.voice_type,
+            "tags": voice.tags,
+            "created_at": voice.created_at,
+            "updated_at": voice.updated_at,
             "audio_exists": audio_exists
         }
     except HTTPException:
@@ -506,20 +508,18 @@ async def delete_voice_model(voice_id: str):
     Delete a voice model
     """
     try:
-        metadata_path = METADATA_DIR / f"{voice_id}.json"
-        audio_path = AUDIO_DIR / f"{voice_id}.wav"
-
-        if not metadata_path.exists():
+        # التحقق من وجود النموذج
+        voice = db.get_voice_model(voice_id)
+        if not voice:
             raise HTTPException(status_code=404, detail="النموذج الصوتي غير موجود - Voice model not found")
 
-        # حذف الملفات
-        metadata_path.unlink()
-        if audio_path.exists():
-            audio_path.unlink()
+        # حذف الملف الصوتي
+        audio_path = db.get_voice_audio_path(voice_id)
+        if audio_path and Path(audio_path).exists():
+            Path(audio_path).unlink()
 
-        # حذف من الذاكرة المؤقتة
-        if voice_id in voice_models_cache:
-            del voice_models_cache[voice_id]
+        # حذف من قاعدة البيانات
+        db.delete_voice_model(voice_id)
 
         return {
             "message": "✅ تم حذف النموذج الصوتي بنجاح - Voice model deleted successfully",
@@ -553,14 +553,17 @@ async def merge_voice_models(
         # التحقق من وجود جميع الأصوات
         audio_data_dict = {}
         for voice_id in voice_ids:
-            audio_path = AUDIO_DIR / f"{voice_id}.wav"
-            metadata_path = METADATA_DIR / f"{voice_id}.json"
-
-            if not audio_path.exists() or not metadata_path.exists():
+            # استعلام قاعدة البيانات
+            voice = db.get_voice_model(voice_id)
+            if not voice:
                 raise HTTPException(status_code=404, detail=f"النموذج الصوتي {voice_id} غير موجود - Voice model {voice_id} not found")
 
             # قراءة الملف الصوتي
-            audio_data, sr = sf.read(str(audio_path))
+            audio_path = db.get_voice_audio_path(voice_id)
+            if not audio_path or not Path(audio_path).exists():
+                raise HTTPException(status_code=404, detail=f"ملف الصوت لـ {voice_id} غير موجود - Audio file not found")
+
+            audio_data, sr = sf.read(audio_path)
             if sr != 16000:
                 num_samples = int(len(audio_data) * 16000 / sr)
                 audio_data = np.interp(
@@ -583,11 +586,6 @@ async def merge_voice_models(
             language=lang
         )
 
-        # حفظ البيانات الوصفية
-        metadata_path = METADATA_DIR / f"{merged_model.id}.json"
-        with open(metadata_path, "w", encoding="utf-8") as f:
-            json.dump(merged_model.to_dict(), f, ensure_ascii=False, indent=2)
-
         # حفظ الملف الصوتي
         merged_audio = audio_data_dict[voice_ids[0]]  # Get one as reference
         if weights:
@@ -609,8 +607,11 @@ async def merge_voice_models(
         audio_path = AUDIO_DIR / f"{merged_model.id}.wav"
         sf.write(str(audio_path), merged_audio, 16000)
 
-        # تخزين في الذاكرة المؤقتة
-        voice_models_cache[merged_model.id] = merged_model
+        # حفظ في قاعدة البيانات
+        db.save_voice_model(merged_model, str(audio_path), merged_model.features)
+
+        # حفظ سجل الدمج
+        db.save_merge_history(merged_model.id, voice_ids, weights)
 
         return {
             "id": merged_model.id,
@@ -627,6 +628,131 @@ async def merge_voice_models(
         raise
     except Exception as e:
         raise HTTPException(status_code=400, detail=f"خطأ في دمج الأصوات: {str(e)}")
+
+
+@app.get("/voices/{voice_id}/merge-history")
+async def get_merge_history(voice_id: str):
+    """
+    الحصول على سجل دمج النموذج الصوتي
+    Get merge history for a voice model
+    """
+    try:
+        voice = db.get_voice_model(voice_id)
+        if not voice:
+            raise HTTPException(status_code=404, detail="النموذج الصوتي غير موجود - Voice model not found")
+
+        history = db.get_merge_history(voice_id)
+        if not history:
+            return {
+                "voice_id": voice_id,
+                "is_merged": False,
+                "message": "هذا النموذج ليس نتيجة دمج - This voice is not a merged model"
+            }
+
+        return {
+            "voice_id": voice_id,
+            "is_merged": True,
+            "source_voices": history['source_voice_ids'],
+            "weights": history['weights'],
+            "merged_at": history['created_at']
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@app.get("/voices/{voice_id}/synthesis-history")
+async def get_synthesis_history(voice_id: str, limit: int = Query(10, ge=1, le=100)):
+    """
+    الحصول على سجل التخليق الصوتي للنموذج
+    Get synthesis history for a voice model
+    """
+    try:
+        voice = db.get_voice_model(voice_id)
+        if not voice:
+            raise HTTPException(status_code=404, detail="النموذج الصوتي غير موجود - Voice model not found")
+
+        history = db.get_synthesis_history(voice_id, limit=limit)
+
+        return {
+            "voice_id": voice_id,
+            "voice_name": voice.name,
+            "total_syntheses": len(history),
+            "syntheses": history
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@app.post("/database/backup")
+async def backup_database(backup_name: str = Query(None)):
+    """
+    إنشاء نسخة احتياطية من قاعدة البيانات
+    Create a database backup
+    """
+    try:
+        if not backup_name:
+            backup_name = f"backup_{datetime.utcnow().isoformat().replace(':', '-')}"
+
+        backup_path = BACKUP_DIR / f"{backup_name}.db"
+        success = db.export_backup(str(backup_path))
+
+        if success:
+            return {
+                "status": "success",
+                "message": f"✅ تم إنشاء النسخة الاحتياطية - Backup created successfully",
+                "backup_name": backup_name,
+                "backup_path": str(backup_path),
+                "timestamp": datetime.utcnow().isoformat()
+            }
+        else:
+            raise HTTPException(status_code=500, detail="فشل في إنشاء النسخة الاحتياطية - Backup creation failed")
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@app.get("/database/verify")
+async def verify_database():
+    """
+    التحقق من سلامة قاعدة البيانات
+    Verify database integrity
+    """
+    try:
+        is_valid = db.verify_database()
+
+        return {
+            "status": "valid" if is_valid else "corrupted",
+            "message": "✅ قاعدة البيانات سليمة - Database is valid" if is_valid else "❌ قاعدة البيانات تالفة - Database is corrupted",
+            "timestamp": datetime.utcnow().isoformat()
+        }
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@app.get("/database/stats")
+async def get_database_stats():
+    """
+    الحصول على إحصائيات قاعدة البيانات
+    Get database statistics
+    """
+    try:
+        total_voices = db.count_voice_models()
+        merged_voices = db.count_voice_models(voice_type="merged")
+        original_voices = db.count_voice_models(voice_type="original")
+
+        return {
+            "total_voices": total_voices,
+            "original_voices": original_voices,
+            "merged_voices": merged_voices,
+            "cloned_voices": db.count_voice_models(voice_type="cloned"),
+            "database_path": str(db.db_path),
+            "database_size_mb": db.db_path.stat().st_size / (1024 * 1024) if db.db_path.exists() else 0
+        }
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
 
 
 if __name__ == "__main__":
