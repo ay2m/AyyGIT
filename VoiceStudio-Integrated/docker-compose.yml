@@ -1,0 +1,33 @@
+version: '3.8'
+
+services:
+  voicestudio:
+    build: .
+    ports:
+      - "8000:8000"
+      - "8001:8001"
+    environment:
+      - PYTHONUNBUFFERED=1
+      - DEVICE=cuda  # تغيير إلى cuda للـ GPU
+    volumes:
+      - ./logs:/app/logs
+      - ./models:/app/models
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+  # خادم Nginx للـ proxy (اختياري)
+  nginx:
+    image: nginx:alpine
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./nginx.conf:/etc/nginx/nginx.conf:ro
+    depends_on:
+      - voicestudio
+    restart: unless-stopped

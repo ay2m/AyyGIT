@@ -1,0 +1,177 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: #f8f9fa; }
+    a { color: #2563eb; text-decoration: none; }
+    a:hover { color: #1d4ed8; }
+  </style>
+</helmet>
+
+<!-- Synthesize Screen -->
+<div style="width: 1440px; min-height: 900px; background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; display: flex; flex-direction: column;">
+  <!-- Header -->
+  <div style="padding: 24px 32px; border-bottom: 1px solid rgba(255,255,255,0.1); display: flex; justify-content: space-between; align-items: center;">
+    <div style="display: flex; align-items: center; gap: 12px;">
+      <div style="width: 40px; height: 40px; background: rgba(255,255,255,0.2); border-radius: 50%; display: flex; align-items: center; justify-content: center; font-weight: bold;">🎤</div>
+      <h1 style="font-size: 24px; font-weight: 600;">VoiceStudio - Synthesize</h1>
+    </div>
+    <div style="display: flex; gap: 16px;">
+      <button style="padding: 10px 16px; background: rgba(255,255,255,0.2); border: none; border-radius: 8px; color: white; cursor: pointer; font-size: 14px;">← Back</button>
+    </div>
+  </div>
+
+  <!-- Main Content -->
+  <div style="padding: 48px 32px; flex: 1; overflow-y: auto;">
+    <h2 style="font-size: 32px; font-weight: 700; margin-bottom: 32px;">Convert Text to Speech</h2>
+
+    <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 32px; max-width: 1200px;">
+      <!-- Text Input Panel -->
+      <div style="background: rgba(255,255,255,0.95); border-radius: 16px; padding: 32px; color: #333; display: flex; flex-direction: column;">
+        <h3 style="font-size: 18px; font-weight: 600; margin-bottom: 24px;">Input Text</h3>
+
+        <textarea placeholder="Enter your text here... السلام عليكم ورحمة الله..." style="flex: 1; padding: 16px; border: 1px solid #e0e0e0; border-radius: 8px; font-size: 14px; font-family: inherit; resize: none; min-height: 200px; margin-bottom: 16px;">السلام عليكم ورحمة الله وبركاته. مرحبا بك في VoiceStudio، منصتك الموثوقة لتحويل النصوص إلى كلام طبيعي باستخدام تقنيات الذكاء الاصطناعي المتقدمة.</textarea>
+
+        <div style="display: flex; justify-content: space-between; align-items: center; font-size: 12px; color: #999;">
+          <span>Word count: 42 | Estimated time: 15 seconds</span>
+          <div style="display: flex; gap: 8px;">
+            <button style="padding: 6px 12px; background: #f0f0f0; border: 1px solid #e0e0e0; border-radius: 6px; cursor: pointer; font-size: 12px;">Clear</button>
+            <button style="padding: 6px 12px; background: #667eea; color: white; border: none; border-radius: 6px; cursor: pointer; font-size: 12px; font-weight: 600;">Paste</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- Settings & Preview Panel -->
+      <div style="display: flex; flex-direction: column; gap: 20px;">
+        <!-- Voice Selection -->
+        <div style="background: rgba(255,255,255,0.95); border-radius: 16px; padding: 32px; color: #333;">
+          <h3 style="font-size: 18px; font-weight: 600; margin-bottom: 16px;">Select Voice</h3>
+
+          <div style="display: flex; flex-direction: column; gap: 12px;">
+            <!-- Voice 1 -->
+            <div style="padding: 12px; background: #f8f9fa; border-radius: 8px; border: 2px solid #667eea; cursor: pointer;">
+              <div style="font-weight: 600; font-size: 14px; margin-bottom: 4px;">Professional Voice</div>
+              <div style="font-size: 12px; color: #999;">Deep, clear, formal tone</div>
+            </div>
+
+            <!-- Voice 2 -->
+            <div style="padding: 12px; background: #f8f9fa; border-radius: 8px; border: 2px solid transparent; cursor: pointer;">
+              <div style="font-weight: 600; font-size: 14px; margin-bottom: 4px;">Casual Voice</div>
+              <div style="font-size: 12px; color: #999;">Friendly, natural, warm tone</div>
+            </div>
+
+            <!-- Voice 3 -->
+            <div style="padding: 12px; background: #f8f9fa; border-radius: 8px; border: 2px solid transparent; cursor: pointer;">
+              <div style="font-weight: 600; font-size: 14px; margin-bottom: 4px;">Merged Voice</div>
+              <div style="font-size: 12px; color: #999;">Balanced blend of multiple voices</div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Synthesis Settings -->
+        <div style="background: rgba(255,255,255,0.95); border-radius: 16px; padding: 32px; color: #333;">
+          <h3 style="font-size: 18px; font-weight: 600; margin-bottom: 16px;">Synthesis Options</h3>
+
+          <!-- Language -->
+          <div style="margin-bottom: 16px;">
+            <label style="display: block; font-size: 13px; font-weight: 500; margin-bottom: 6px;">Language</label>
+            <select style="width: 100%; padding: 8px; border: 1px solid #e0e0e0; border-radius: 6px; font-size: 13px;">
+              <option selected>العربية (Arabic)</option>
+              <option>English</option>
+              <option>Français</option>
+              <option>Español</option>
+            </select>
+          </div>
+
+          <!-- Speed -->
+          <div style="margin-bottom: 16px;">
+            <div style="display: flex; justify-content: space-between; margin-bottom: 6px;">
+              <label style="font-size: 13px; font-weight: 500;">Speed</label>
+              <span style="font-size: 12px; color: #667eea;">1.0x</span>
+            </div>
+            <input type="range" min="0.5" max="2" step="0.1" value="1" style="width: 100%; height: 4px; border-radius: 2px; background: #e0e0e0;">
+          </div>
+
+          <!-- Quality -->
+          <div>
+            <label style="display: block; font-size: 13px; font-weight: 500; margin-bottom: 6px;">Quality</label>
+            <div style="display: flex; gap: 8px;">
+              <button style="flex: 1; padding: 6px; background: #f0f0f0; border: 1px solid #e0e0e0; border-radius: 4px; cursor: pointer; font-size: 12px;">Fast</button>
+              <button style="flex: 1; padding: 6px; background: #667eea; color: white; border: none; border-radius: 4px; cursor: pointer; font-size: 12px; font-weight: 600;">High</button>
+              <button style="flex: 1; padding: 6px; background: #f0f0f0; border: 1px solid #e0e0e0; border-radius: 4px; cursor: pointer; font-size: 12px;">Max</button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Preview & Actions -->
+    <div style="margin-top: 32px; display: grid; grid-template-columns: 1fr 1fr; gap: 32px; max-width: 1200px;">
+      <!-- Player -->
+      <div style="background: rgba(255,255,255,0.95); border-radius: 16px; padding: 32px; color: #333;">
+        <h3 style="font-size: 18px; font-weight: 600; margin-bottom: 24px;">Preview Audio</h3>
+
+        <div style="background: #f8f9fa; border-radius: 12px; padding: 24px; margin-bottom: 16px; text-align: center;">
+          <button style="width: 60px; height: 60px; background: #667eea; color: white; border: none; border-radius: 50%; cursor: pointer; font-size: 24px; display: flex; align-items: center; justify-content: center; margin: 0 auto 16px;">▶</button>
+          <div style="font-size: 14px; font-weight: 600; margin-bottom: 8px;">Synthesized Audio</div>
+          <div style="font-size: 12px; color: #999;">00:00 / 00:15</div>
+        </div>
+
+        <div style="background: #f0f0f0; height: 4px; border-radius: 2px; overflow: hidden; margin-bottom: 16px;">
+          <div style="height: 100%; width: 0%; background: #667eea;"></div>
+        </div>
+
+        <div style="display: flex; gap: 8px;">
+          <button style="flex: 1; padding: 10px; background: #f0f0f0; border: 1px solid #e0e0e0; border-radius: 8px; cursor: pointer; font-size: 13px;">🔄 Regenerate</button>
+          <button style="flex: 1; padding: 10px; background: #667eea; color: white; border: none; border-radius: 8px; cursor: pointer; font-size: 13px; font-weight: 600;">⬇️ Download</button>
+        </div>
+      </div>
+
+      <!-- Actions -->
+      <div style="background: rgba(255,255,255,0.95); border-radius: 16px; padding: 32px; color: #333; display: flex; flex-direction: column; justify-content: space-between;">
+        <div>
+          <h3 style="font-size: 18px; font-weight: 600; margin-bottom: 24px;">Save & Export</h3>
+
+          <div style="margin-bottom: 24px;">
+            <label style="display: block; font-size: 13px; font-weight: 500; margin-bottom: 8px;">Save as project</label>
+            <input type="text" placeholder="My Project Name" style="width: 100%; padding: 10px; border: 1px solid #e0e0e0; border-radius: 8px; font-size: 13px;">
+          </div>
+
+          <div style="background: #f8f9fa; border-radius: 8px; padding: 16px; margin-bottom: 24px;">
+            <div style="display: flex; align-items: center; gap: 12px; margin-bottom: 8px;">
+              <input type="checkbox" checked style="width: 16px; height: 16px;">
+              <span style="font-size: 13px;">Save to library</span>
+            </div>
+            <div style="display: flex; align-items: center; gap: 12px;">
+              <input type="checkbox" style="width: 16px; height: 16px;">
+              <span style="font-size: 13px;">Download as file</span>
+            </div>
+          </div>
+        </div>
+
+        <div style="display: flex; gap: 12px;">
+          <button style="flex: 1; padding: 12px; background: #f0f0f0; border: 1px solid #e0e0e0; border-radius: 8px; cursor: pointer; font-weight: 600;">Cancel</button>
+          <button style="flex: 1; padding: 12px; background: #2ed573; color: white; border: none; border-radius: 8px; cursor: pointer; font-weight: 600; font-size: 16px;">🔊 Synthesize</button>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+</x-dc>
+
+<script data-dc-script data-props='{}'>
+class Component extends DCLogic {
+  renderVals() {
+    return {};
+  }
+}
+</script>
+</body>
+</html>
