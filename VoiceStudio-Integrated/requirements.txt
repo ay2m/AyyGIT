@@ -21,7 +21,7 @@ bark-huggingface==0.0.6
 TTS==0.22.0
 
 # AI & NLP
-transformers==4.35.2
+transformers==5.10.1
 torch==2.13.0
 torchaudio==2.1.1
 
